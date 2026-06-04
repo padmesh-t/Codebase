@@ -45,12 +45,61 @@ class CodeIngestionService:
 
         project_dir = settings.REPO_DIR / project_id
         project_dir.mkdir(parents=True, exist_ok=True)
+
+        archive_url = self._get_github_archive_url(git_url)
+        if archive_url:
+            return await self._download_and_extract(archive_url, project_dir, project_id)
+
         try:
             logger.info(f"Cloning {git_url}")
             git.Repo.clone_from(git_url, str(project_dir), depth=1)
             return project_dir
         except git.GitCommandError as e:
             raise GitCloneException(f"Failed to clone: {e}")
+
+    def _get_github_archive_url(self, git_url: str) -> str | None:
+        import re
+        patterns = [
+            r"https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$",
+            r"https://github\.com/([^/]+)/([^/]+)/?$",
+        ]
+        for pattern in patterns:
+            match = re.match(pattern, git_url)
+            if match:
+                owner, repo = match.groups()
+                return f"https://github.com/{owner}/{repo}/archive/refs/heads/main.zip"
+        return None
+
+    async def _download_and_extract(self, url: str, project_dir: Path, project_id: str) -> Path:
+        import httpx
+        import re
+        branches = ["main", "master"]
+        owner_repo = re.search(r"github\.com/([^/]+)/([^/]+)", url)
+        if not owner_repo:
+            raise GitCloneException("Invalid GitHub URL")
+
+        owner, repo = owner_repo.groups()
+
+        last_error = None
+        for branch in branches:
+            archive_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/{branch}.zip"
+            try:
+                logger.info(f"Trying to download from {archive_url}")
+                async with httpx.AsyncClient(follow_redirects=True, timeout=120.0) as client:
+                    response = await client.get(archive_url)
+                    if response.status_code == 200:
+                        data = io.BytesIO(response.content)
+                        self._safe_extract_zip(data, project_dir)
+                        logger.info(f"Extracted to {project_dir}")
+                        return project_dir
+                    else:
+                        last_error = f"HTTP {response.status_code}"
+                        continue
+            except Exception as e:
+                last_error = str(e)
+                continue
+
+        raise GitCloneException(f"Failed to download repo: {last_error}")
 
     async def upload_project(self, file, project_id: str) -> Path:
         project_dir = settings.UPLOAD_DIR / project_id
