@@ -69,6 +69,8 @@ class Settings(BaseSettings):
 
     LOG_LEVEL: str = "INFO"
 
+    DATABASE_URL: str = ""
+
 
 settings = Settings()
 settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)

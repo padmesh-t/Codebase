@@ -1,6 +1,5 @@
 import time
 import uuid
-import secrets
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
@@ -17,10 +16,10 @@ from app.models import (
     AnalyzeResponse, ProjectStatusResponse,
     HealthResponse, ProjectStatus
 )
+from app.database import init_db, save_project, load_project, load_all_projects, delete_project as db_delete_project
 
 logger = get_logger("main")
 
-projects: dict[str, dict] = {}
 executor = ThreadPoolExecutor(max_workers=2)
 
 _rate_limits: dict[str, list[float]] = defaultdict(list)
@@ -44,12 +43,10 @@ def _validate_git_url(url: str) -> bool:
     )
 
 
-
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting Codebase Intelligence API v1.0.0")
+    init_db()
     from app.services.llm_service import llm_service
     health = await llm_service.check_health()
     if health["connected"]:
@@ -135,12 +132,13 @@ async def global_exception_handler(request: Request, exc: Exception):
 async def health_check():
     from app.services.llm_service import llm_service
     llm_health = await llm_service.check_health()
+    all_projects = load_all_projects()
     return HealthResponse(
         status="healthy",
         version="1.0.0",
         ollama_connected=llm_health["connected"],
-        vector_store_loaded=False,
-        active_projects=len(projects),
+        vector_store_loaded=True,
+        active_projects=len(all_projects),
     )
 
 
@@ -156,33 +154,51 @@ def _run_analysis(project_id: str, project_dir, project_name: str):
     from app.services.vector_store import vector_store_service
     from app.chains.debate_engine import debate_engine
 
+    project_data = load_project(project_id) or {
+        "project_id": project_id,
+        "name": project_name,
+        "status": ProjectStatus.INGESTING,
+        "file_count": 0,
+        "chunk_count": 0,
+        "findings": [],
+        "debate_messages": [],
+        "report": {},
+    }
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        projects[project_id]["status"] = ProjectStatus.INGESTING
+        project_data["status"] = ProjectStatus.INGESTING
+        save_project(project_id, project_data)
+
         chunks = loop.run_until_complete(
             code_ingestion_service.ingest_project(project_dir, project_id)
         )
-        projects[project_id]["file_count"] = len(set(c.metadata.get("file_path", "") for c in chunks))
-        projects[project_id]["chunk_count"] = len(chunks)
+        project_data["file_count"] = len(set(c.metadata.get("file_path", "") for c in chunks))
+        project_data["chunk_count"] = len(chunks)
+        save_project(project_id, project_data)
 
         loop.run_until_complete(vector_store_service.add_documents(chunks, project_id))
 
-        projects[project_id]["status"] = ProjectStatus.DEBATING
+        project_data["status"] = ProjectStatus.DEBATING
+        save_project(project_id, project_data)
+
         result = loop.run_until_complete(
-            debate_engine.run(project_id, chunks, projects[project_id])
+            debate_engine.run(project_id, chunks, project_data)
         )
 
-        projects[project_id]["findings"] = result["findings"]
-        projects[project_id]["debate_messages"] = result["debate_messages"]
-        projects[project_id]["report"] = result["report"]
-        projects[project_id]["status"] = ProjectStatus.COMPLETED
+        project_data["findings"] = result["findings"]
+        project_data["debate_messages"] = result["debate_messages"]
+        project_data["report"] = result["report"]
+        project_data["status"] = ProjectStatus.COMPLETED
+        save_project(project_id, project_data)
         logger.info(f"Analysis completed for {project_id}: {len(result['findings'])} findings")
 
     except Exception as e:
         logger.error(f"Analysis failed for {project_id}: {e}", exc_info=True)
-        projects[project_id]["status"] = ProjectStatus.FAILED
-        projects[project_id]["error"] = str(e)
+        project_data["status"] = ProjectStatus.FAILED
+        project_data["error"] = str(e)
+        save_project(project_id, project_data)
     finally:
         loop.close()
 
@@ -195,7 +211,8 @@ async def analyze_project(
 ):
     from app.services.code_ingestion import code_ingestion_service
 
-    if len(projects) >= settings.MAX_PROJECT_COUNT:
+    all_projects = load_all_projects()
+    if len(all_projects) >= settings.MAX_PROJECT_COUNT:
         raise HTTPException(status_code=429, detail="Too many projects. Delete some first.")
 
     if not git_url and not file:
@@ -212,7 +229,7 @@ async def analyze_project(
         else:
             project_name = file.filename if file else "uploaded_project"
 
-    projects[project_id] = {
+    project_data = {
         "project_id": project_id,
         "name": project_name,
         "source": "git_url" if git_url else "upload",
@@ -221,8 +238,9 @@ async def analyze_project(
         "chunk_count": 0,
         "findings": [],
         "debate_messages": [],
-        "report": None,
+        "report": {},
     }
+    save_project(project_id, project_data)
 
     try:
         if git_url:
@@ -230,7 +248,7 @@ async def analyze_project(
         else:
             project_dir = await code_ingestion_service.upload_project(file, project_id)
     except Exception as e:
-        projects.pop(project_id, None)
+        db_delete_project(project_id)
         raise HTTPException(status_code=400, detail=str(e))
 
     executor.submit(_run_analysis, project_id, project_dir, project_name)
@@ -244,9 +262,9 @@ async def analyze_project(
 
 @app.get("/projects/{project_id}/status", response_model=ProjectStatusResponse)
 async def get_project_status(project_id: str):
-    if project_id not in projects:
+    p = load_project(project_id)
+    if not p:
         raise HTTPException(status_code=404, detail="Project not found")
-    p = projects[project_id]
     status_map = {
         ProjectStatus.PENDING: 0,
         ProjectStatus.INGESTING: 25,
@@ -267,9 +285,9 @@ async def get_project_status(project_id: str):
 
 @app.get("/projects/{project_id}/report")
 async def get_report(project_id: str):
-    if project_id not in projects:
+    p = load_project(project_id)
+    if not p:
         raise HTTPException(status_code=404, detail="Project not found")
-    p = projects[project_id]
     if p["status"] != ProjectStatus.COMPLETED:
         raise HTTPException(status_code=400, detail=f"Project status is {p['status']}")
     return p["report"]
@@ -277,9 +295,9 @@ async def get_report(project_id: str):
 
 @app.get("/projects/{project_id}/debate")
 async def get_debate(project_id: str):
-    if project_id not in projects:
+    p = load_project(project_id)
+    if not p:
         raise HTTPException(status_code=404, detail="Project not found")
-    p = projects[project_id]
     return {
         "project_id": project_id,
         "messages": p["debate_messages"],
@@ -289,17 +307,13 @@ async def get_debate(project_id: str):
 
 @app.get("/projects")
 async def list_projects():
-    return [
-        {k: v for k, v in p.items() if k not in ("chunks", "findings", "debate_messages", "report")}
-        for p in projects.values()
-    ]
+    return load_all_projects()
 
 
 @app.delete("/projects/{project_id}")
 async def delete_project(project_id: str):
-    if project_id not in projects:
+    if not db_delete_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
-    del projects[project_id]
     return {"message": f"Project {project_id} deleted"}
 
 
