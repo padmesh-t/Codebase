@@ -1,0 +1,35 @@
+# Web framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+python-multipart>=0.0.18
+
+# LangChain + LangGraph
+langgraph>=1.2.0
+langchain-core>=1.4.0
+langchain-community>=0.3.0
+langchain-text-splitters>=0.3.0
+
+# Vector store
+faiss-cpu>=1.9.0
+
+# Embeddings
+sentence-transformers>=3.0.0
+
+# Code chunking
+tree-sitter>=0.25.0
+tree-sitter-python>=0.23.0
+
+# Git integration
+gitpython>=3.1.0
+
+# Configuration
+pydantic>=2.10.0
+pydantic-settings>=2.7.0
+python-dotenv>=1.0.0
+
+# HTTP client (for OpenRouter API)
+httpx>=0.28.0
+
+# Utilities
+numpy>=1.26.0
+aiofiles>=24.0.0
