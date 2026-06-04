@@ -47,12 +47,6 @@ def _validate_git_url(url: str) -> bool:
 async def lifespan(app: FastAPI):
     logger.info("Starting Codebase Intelligence API v1.0.0")
     init_db()
-    from app.services.llm_service import llm_service
-    health = await llm_service.check_health()
-    if health["connected"]:
-        logger.info("LLM connection OK")
-    else:
-        logger.warning(f"LLM not connected: {health.get('error', 'unknown')}")
     yield
     executor.shutdown(wait=False)
     logger.info("Shutting down...")

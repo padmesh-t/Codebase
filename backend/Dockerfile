@@ -9,6 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+
 COPY . .
 
 RUN mkdir -p /app/data/uploads /app/data/repos /app/data/vector_store /app/logs
@@ -22,4 +24,4 @@ ENV VECTOR_STORE_DIR=/app/data/vector_store
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port $PORT"]
