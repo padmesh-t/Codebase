@@ -14,17 +14,5 @@
       "src": "/(.*)",
       "dest": "app/main.py"
     }
-  ],
-  "env": {
-    "OPENROUTER_API_KEY": "@openrouter-api-key",
-    "OPENROUTER_MODEL": "anthropic/claude-3-haiku",
-    "JWT_SECRET": "@jwt-secret",
-    "FRONTEND_URL": "@frontend-url",
-    "EMBEDDING_MODEL": "all-MiniLM-L6-v2",
-    "TOP_K_RESULTS": "10",
-    "DEBATE_ROUNDS": "3",
-    "ENABLE_RATE_LIMITING": "true",
-    "RATE_LIMIT_REQUESTS": "100",
-    "RATE_LIMIT_WINDOW": "60"
-  }
+  ]
 }
