@@ -16,10 +16,9 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = 60
     USE_AST_CHUNKING: bool = True
 
-    EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
-    EMBEDDING_DIMENSION: int = 384
+    EMBEDDING_MODEL: str = "hash-based"
+    EMBEDDING_DIMENSION: int = 256
 
-    FAISS_INDEX_TYPE: str = "flat"
     TOP_K_RESULTS: int = 10
 
     # OpenRouter API

@@ -1,6 +1,8 @@
 import json
+import pickle
 from pathlib import Path
 
+import numpy as np
 from langchain_core.documents import Document
 from app.config import settings
 from app.logging_config import get_logger
@@ -9,9 +11,57 @@ from app.exceptions import VectorStoreException
 logger = get_logger("vector_store")
 
 
+class NumpyVectorStore:
+    def __init__(self):
+        self.embeddings: np.ndarray | None = None
+        self.documents: list[Document] = []
+
+    def add_documents(self, chunks: list[Document], embeddings: list[list[float]]):
+        self.documents = chunks
+        self.embeddings = np.array(embeddings, dtype=np.float32)
+
+    def similarity_search_with_score(self, query_embedding: list[float], top_k: int = 10) -> list:
+        if self.embeddings is None or len(self.documents) == 0:
+            return []
+
+        query_vec = np.array(query_embedding, dtype=np.float32)
+        similarities = np.dot(self.embeddings, query_vec)
+        norms = np.linalg.norm(self.embeddings, axis=1) * np.linalg.norm(query_vec)
+        norms[norms == 0] = 1.0
+        similarities = similarities / norms
+
+        top_indices = np.argsort(similarities)[::-1][:top_k]
+
+        results = []
+        for idx in top_indices:
+            score = 1.0 - float(similarities[idx])
+            results.append((self.documents[idx], score))
+
+        return results
+
+    def save(self, path: Path):
+        path.mkdir(parents=True, exist_ok=True)
+        np.save(path / "embeddings.npy", self.embeddings)
+        with open(path / "documents.pkl", "wb") as f:
+            pickle.dump(self.documents, f)
+
+    @classmethod
+    def load(cls, path: Path) -> "NumpyVectorStore":
+        store = cls()
+        emb_path = path / "embeddings.npy"
+        doc_path = path / "documents.pkl"
+
+        if emb_path.exists() and doc_path.exists():
+            store.embeddings = np.load(emb_path)
+            with open(doc_path, "rb") as f:
+                store.documents = pickle.load(f)
+
+        return store
+
+
 class VectorStoreService:
     def __init__(self):
-        self._vector_stores: dict[str, object] = {}
+        self._vector_stores: dict[str, NumpyVectorStore] = {}
         self._embedding_service = None
 
     @property
@@ -29,65 +79,42 @@ class VectorStoreService:
 
     async def add_documents(self, chunks: list[Document], project_id: str):
         try:
-            from langchain_community.vectorstores import FAISS
-            import faiss
-            import numpy as np
-
             store_path = self._get_store_path(project_id)
             store_path.mkdir(parents=True, exist_ok=True)
 
             texts = [doc.page_content for doc in chunks]
             embeddings = self.embedding_service.embed_documents(texts)
-            embeddings_array = np.array(embeddings, dtype=np.float32)
-            dimension = embeddings_array.shape[1]
 
-            index = faiss.IndexFlatL2(dimension)
-            index.add(embeddings_array)
-
-            vector_store = FAISS(
-                embedding_function=self.embedding_service.embeddings,
-                index=index,
-                docstore=self._create_docstore(chunks),
-                index_to_docstore_id={i: i for i in range(len(chunks))},
-            )
-
-            vector_store.save_local(str(store_path))
+            store = NumpyVectorStore()
+            store.add_documents(chunks, embeddings)
+            store.save(store_path)
 
             metadata = {
                 "project_id": project_id,
                 "chunk_count": len(chunks),
-                "dimension": dimension,
+                "dimension": len(embeddings[0]) if embeddings else 0,
                 "file_count": len(set(doc.metadata.get("file_path", "") for doc in chunks)),
             }
             self._get_metadata_path(project_id).write_text(json.dumps(metadata, indent=2))
 
-            self._vector_stores[project_id] = vector_store
+            self._vector_stores[project_id] = store
             logger.info(f"Added {len(chunks)} chunks for {project_id}")
 
         except Exception as e:
             raise VectorStoreException(f"Failed to add documents: {e}")
 
-    def _create_docstore(self, chunks: list[Document]):
-        from langchain_community.docstore.in_memory import InMemoryDocstore
-        return InMemoryDocstore({i: doc for i, doc in enumerate(chunks)})
-
-    def get_store(self, project_id: str):
+    def get_store(self, project_id: str) -> NumpyVectorStore | None:
         if project_id in self._vector_stores:
             return self._vector_stores[project_id]
 
         try:
-            from langchain_community.vectorstores import FAISS
             store_path = self._get_store_path(project_id)
             if not store_path.exists():
                 return None
 
-            vector_store = FAISS.load_local(
-                str(store_path),
-                self.embedding_service.embeddings,
-                allow_dangerous_deserialization=True,
-            )
-            self._vector_stores[project_id] = vector_store
-            return vector_store
+            store = NumpyVectorStore.load(store_path)
+            self._vector_stores[project_id] = store
+            return store
         except Exception as e:
             logger.error(f"Failed to load vector store for {project_id}: {e}")
             return None
@@ -97,7 +124,8 @@ class VectorStoreService:
         if store is None:
             raise VectorStoreException(f"No vector store for {project_id}")
         try:
-            return store.similarity_search_with_score(query, k=top_k)
+            query_embedding = self.embedding_service.embed_query(query)
+            return store.similarity_search_with_score(query_embedding, top_k)
         except Exception as e:
             raise VectorStoreException(f"Search failed: {e}")
 
