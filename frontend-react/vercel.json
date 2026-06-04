@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "framework": "vite",
+  "env": {
+    "VITE_REACT_APP_BACKEND_BASEURL": "@backend-url"
+  },
+  "rewrites": [
+    {
+      "source": "/((?!assets/).*)",
+      "destination": "/index.html"
+    }
+  ]
+}

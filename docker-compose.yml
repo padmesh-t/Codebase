@@ -8,9 +8,21 @@ services:
     environment:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-meta-llama/llama-3.1-8b-instruct:free}
+      - JWT_SECRET=${JWT_SECRET:-your-secret-key-change-in-production}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
       - LOG_LEVEL=INFO
 
   frontend:
+    build: ./frontend-react
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_REACT_APP_BACKEND_BASEURL=http://backend:8000
+    depends_on:
+      - backend
+
+  # Legacy Streamlit frontend (optional)
+  frontend-streamlit:
     build: ./frontend
     ports:
       - "8501:8501"
@@ -18,6 +30,8 @@ services:
       - API_BASE_URL=http://backend:8000
     depends_on:
       - backend
+    profiles:
+      - streamlit
 
 volumes:
   backend_data:

@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     DEBATE_ROUNDS: int = 3
     MAX_FINDINGS_PER_AGENT: int = 5
 
+    # Security
+    JWT_SECRET: str = "your-secret-key-change-in-production"
+    FRONTEND_URL: str = "http://localhost:8501"
     ENABLE_API_KEY_AUTH: bool = False
     API_KEY: str = ""
     ENABLE_RATE_LIMITING: bool = True
